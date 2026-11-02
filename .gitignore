@@ -1,0 +1,37 @@
+# Python and local development environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+.build/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Build and release outputs
+/build/
+/dist/
+/release/
+*.zip
+
+# Application state and credentials belong on the user's computer
+/data/
+/config/settings.json
+/portable.flag
+*.log
+MSO-Logs.txt
+*.json.enc
+.env
+.env.*
+!.env.example
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.tmp

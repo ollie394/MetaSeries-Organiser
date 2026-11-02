@@ -1,0 +1,14 @@
+{
+  "portable": false,
+  "preferred_language": "en",
+  "order": "aired",
+  "operation": "move",
+  "wrap_log": true,
+  "log_visible": false,
+  "log_fraction": 0.26,
+  "include_subfolders": false,
+  "verification_mode": "Verified",
+  "verification_method": "BLAKE3",
+  "quick_sample": true,
+  "last_window_size": [1180, 820]
+}

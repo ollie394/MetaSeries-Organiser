@@ -1,0 +1,975 @@
+#!/usr/bin/env python3
+"""
+MetaSeries-Organiser – TV Series Renamer & Sorter (Portable)
+
+- Windows-friendly, single-file script. Build a portable EXE via PyInstaller.
+- **Two GUI options**:
+  1) PySimpleGUI / FreeSimpleGUI (with extensive compatibility shims)
+  2) **Tkinter** (built into Python). Force with `--tk` or auto-fallback if PSG isn't available.
+- **Splash screen** with MetaSeries-Organiser logo and TMDB attribution (4s).
+- Uses TMDB (free) by default; optional TVDB (paid API) stub included for future extension.
+- Renames and moves TV episodes into Plex-friendly structure with year in series name and English "Season" folders.
+- Supports:
+  • Standard sXXeYY / SXXEYY (and ranges like sXXeYY-eZZ or SXXEYY-EZZ)
+  • Date-based episodes (YYYY-MM-DD, DD-MM-YYYY, with -, ., or space separators)
+  • Specials (season 00) and a "Specials" alias
+  • Episode split parts (cdX/discX/diskX/dvdX/partX/ptX)
+  • Inline episode extras (-behindthescenes, -deleted, -featurette, -interview, -scene, -short, -trailer, -other with optional numeric suffix)
+  • Absolute numbering like "141. Title.mkv" (maps overall index to S/E using provider order)
+  • Alt patterns like "01x05", "01E05", and post-year short form: "Show (2019) - 01 Title"
+  • Multi-episode single file (sXXeYY-eZZ)
+  • Dry run mode
+  • **Toggle** for uppercase/lowercase S/E codes in output filenames
+
+IMPORTANT:
+- You must supply a TMDB API key (free): https://www.themoviedb.org/settings/api
+- TVDB support requires a paid v4 API token; this script will detect and gracefully fall back to TMDB if TVDB is not configured.
+
+Plex style enforced:
+  Show (Year)/Season XX/Show (Year) - sXXeYY[-eZZ] - Episode Title.ext
+Date-based style:
+  Show (Year)/Season XX/Show (Year) - DD-MM-YYYY - Episode Title.ext
+Specials are Season 00 by default.
+
+"""
+
+import os
+import re
+import sys
+import json
+import time
+import shutil
+import logging
+import pathlib
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional, Tuple, List, Dict
+
+# ---------------------- Optional GUI deps ----------------------
+# Try PySimpleGUI/FreeSimpleGUI first; if unavailable, we fall back to Tkinter.
+sg = None
+try:
+    import PySimpleGUI as sg  # type: ignore
+except Exception:
+    try:
+        import FreeSimpleGUI as sg  # type: ignore
+    except Exception:
+        try:
+            import freesimplegui as sg  # type: ignore
+        except Exception:
+            sg = None
+
+# Tkinter is always available in standard Python installs
+import tkinter as tk
+from tkinter import filedialog, messagebox
+
+try:
+    import requests  # type: ignore
+except Exception:
+    print("requests is required. pip install requests")
+    sys.exit(1)
+
+# ---------------------- Config & Constants ----------------------
+EXTRA_SUFFIXES = [
+    "behindthescenes", "deleted", "featurette", "interview",
+    "scene", "short", "trailer", "other"
+]
+SPLIT_TOKENS = ["cd", "disc", "disk", "dvd", "part", "pt"]
+DATE_SEPS = r"[-.\s]"
+DATE_PATTERNS = [
+    # YYYY-MM-DD (or . or space)
+    re.compile(rf"(?P<y>\d{{4}}){DATE_SEPS}(?P<m>\d{{1,2}}){DATE_SEPS}(?P<d>\d{{1,2}})"),
+    # DD-MM-YYYY (or . or space)
+    re.compile(rf"(?P<d>\d{{1,2}}){DATE_SEPS}(?P<m>\d{{1,2}}){DATE_SEPS}(?P<y>\d{{4}})")
+]
+# Core sXXeYY or SxxEyy (we accept case-insensitive here)
+SXXEYY_RANGE_RE = re.compile(
+    r"(?i)s(?P<s>\d{1,2})\s*e(?P<e1>\d{1,3})(?:\s*[-_\.]?\s*e(?P<e2>\d{1,3}))?"
+)
+# Alt forms: 01x05, 1x5, 01E05, S01 E05 (S optional)
+ALT_SE_RE = re.compile(r"(?i)(?:^|\b)(?:s\s*)?(?P<s>\d{1,2})\s*[ex]\s*(?P<e>\d{1,3})(?:\b|$)")
+# Post-year short form: "Show (2019) - 01 Title" ⇒ Season 01, Episode 01
+DASH_EP_AFTER_YEAR_RE = re.compile(r"\)\s*-\s*(?P<e>\d{1,3})\b")
+
+ABSOLUTE_NUMBER_RE = re.compile(r"^\s*(?P<abs>\d{1,4})[).\-\s_]+")
+SPLIT_PART_RE = re.compile(r"(?i)(?:\b|[-_])(cd|disc|disk|dvd|part|pt)(?P<n>\d+)\b")
+INLINE_EXTRA_RE = re.compile(
+    rf"(?i)-(?P<etype>{'|'.join(EXTRA_SUFFIXES)})(?P<idx>\d+)?(?=\.[^.]+$)"
+)
+
+APP_NAME = "MetaSeries-Organiser"
+SPLASH_BG = "#0b0f17"  # dark blue/black, blends with provided splash
+SPLASH_TEXT = "#E6EDF3"
+ACCENT = "#3EA6FF"
+
+# ---------------------- Provider Interfaces ----------------------
+class ProviderError(Exception):
+    pass
+
+@dataclass
+class EpisodeInfo:
+    season: int
+    episode: int
+    title: Optional[str] = None
+    air_date: Optional[str] = None  # YYYY-MM-DD
+    is_special: bool = False
+
+class Provider:
+    def search_show(self, title: str, year: Optional[int] = None) -> Dict:
+        raise NotImplementedError
+
+    def load_season(self, show_id: str, season_number: int) -> Dict:
+        raise NotImplementedError
+
+    def map_date_to_episode(self, show_id: str, date_iso: str) -> Optional[EpisodeInfo]:
+        raise NotImplementedError
+
+    def build_episode_index(self, show_id: str) -> List[EpisodeInfo]:
+        """Return list of episodes in overall order to support absolute numbering."""
+        raise NotImplementedError
+
+class TMDBProvider(Provider):
+    def __init__(self, api_key: str):
+        if not api_key:
+            raise ProviderError("TMDB API key is required.")
+        self.api_key = api_key
+        self.base = "https://api.themoviedb.org/3"
+        self.session = requests.Session()
+        self.session.params.update({"api_key": self.api_key})
+
+    def search_show(self, title: str, year: Optional[int] = None) -> Dict:
+        params = {"query": title}
+        if year:
+            params["first_air_date_year"] = year
+        r = self.session.get(f"{self.base}/search/tv", params=params, timeout=20)
+        r.raise_for_status()
+        data = r.json()
+        if not data.get("results"):
+            raise ProviderError("Show not found on TMDB.")
+        # Pick best: exact year if provided else first
+        if year:
+            for it in data["results"]:
+                y = (it.get("first_air_date") or "")[:4]
+                if y.isdigit() and int(y) == year:
+                    return it
+        return data["results"][0]
+
+    def load_season(self, show_id: str, season_number: int) -> Dict:
+        r = self.session.get(f"{self.base}/tv/{show_id}/season/{season_number}", timeout=20)
+        if r.status_code == 404:
+            return {"episodes": []}
+        r.raise_for_status()
+        return r.json()
+
+    def map_date_to_episode(self, show_id: str, date_iso: str) -> Optional[EpisodeInfo]:
+        # Iterate seasons 0..50 (sane upper bound) to find matching air_date
+        for s in range(0, 51):
+            season = self.load_season(show_id, s)
+            for ep in season.get("episodes", []) :
+                if ep.get("air_date") == date_iso:
+                    return EpisodeInfo(season=s, episode=ep.get("episode_number"),
+                                       title=ep.get("name"), air_date=ep.get("air_date"),
+                                       is_special=(s==0))
+        return None
+
+    def build_episode_index(self, show_id: str) -> List[EpisodeInfo]:
+        # Build by increasing season, then episode, using air_date as tie-breaker
+        all_eps: List[EpisodeInfo] = []
+        for s in range(0, 101):
+            season = self.load_season(show_id, s)
+            eps = season.get("episodes", [])
+            if not eps and s > 10:
+                # assume no more after a few empty seasons
+                break
+            for ep in eps:
+                all_eps.append(EpisodeInfo(
+                    season=s,
+                    episode=ep.get("episode_number"),
+                    title=ep.get("name"),
+                    air_date=ep.get("air_date"),
+                    is_special=(s==0)
+                ))
+        # Sort by air_date (None last), then season/episode
+        def sd_key(e: EpisodeInfo):
+            ad = e.air_date or "9999-99-99"
+            return (ad, e.season, e.episode)
+        all_eps.sort(key=sd_key)
+        return all_eps
+
+class TVDBProvider(Provider):
+    """Minimal stub. Implement fully if you have a paid TVDB v4 token.
+       This will currently raise ProviderError unless token is provided.
+    """
+    def __init__(self, token: Optional[str]=None):
+        if not token:
+            raise ProviderError("TVDB token not provided. Use TMDB or add TVDB token.")
+        self.session = requests.Session()
+        self.base = "https://api4.thetvdb.com/v4"
+        self.session.headers.update({"Authorization": f"Bearer {token}"})
+
+    def search_show(self, title: str, year: Optional[int] = None) -> Dict:
+        r = self.session.get(f"{self.base}/search", params={"q": title, "type": "series"}, timeout=20)
+        r.raise_for_status()
+        data = r.json().get("data", [])
+        if not data:
+            raise ProviderError("Show not found on TVDB.")
+        # Very naive selection; refine as needed
+        return data[0]
+
+    def load_season(self, show_id: str, season_number: int) -> Dict:
+        # TVDB v4 requires more steps (series -> seasons -> episodes)
+        # Left as an exercise; fallback to TMDB is recommended for now.
+        return {"episodes": []}
+
+    def map_date_to_episode(self, show_id: str, date_iso: str) -> Optional[EpisodeInfo]:
+        return None
+
+    def build_episode_index(self, show_id: str) -> List[EpisodeInfo]:
+        return []
+
+# ---------------------- Parsing helpers ----------------------
+@dataclass
+class ParseResult:
+    kind: str  # 'se', 'se_range', 'date', 'special', 'absolute', 'unknown'
+    season: Optional[int] = None
+    ep1: Optional[int] = None
+    ep2: Optional[int] = None
+    date_iso: Optional[str] = None  # YYYY-MM-DD
+    extra_type: Optional[str] = None
+    extra_index: Optional[int] = None
+    split_token: Optional[str] = None
+    split_index: Optional[int] = None
+
+
+def detect_date(s: str) -> Optional[str]:
+    for rx in DATE_PATTERNS:
+        m = rx.search(s)
+        if m:
+            y = int(m.group("y"))
+            mth = int(m.group("m"))
+            d = int(m.group("d"))
+            try:
+                dt = datetime(y, mth, d)
+                return dt.strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+    return None
+
+
+def parse_filename(fn: str) -> ParseResult:
+    base = os.path.basename(fn)
+    name, ext = os.path.splitext(base)
+
+    # Extra suffix
+    extra = INLINE_EXTRA_RE.search(base)
+    extra_type = None
+    extra_idx = None
+    if extra:
+        extra_type = extra.group("etype").lower()
+        if extra.group("idx"):
+            extra_idx = int(extra.group("idx"))
+
+    # Split parts
+    sp = SPLIT_PART_RE.search(name)
+    split_token = None
+    split_idx = None
+    if sp:
+        split_token = sp.group(1).lower()
+        split_idx = int(sp.group("n"))
+
+    # sXXeYY(-eZZ)
+    m = SXXEYY_RANGE_RE.search(base)
+    if m:
+        s = int(m.group("s"))
+        e1 = int(m.group("e1"))
+        e2 = m.group("e2")
+        if s == 0:
+            kind = "special"
+        elif e2:
+            kind = "se_range"
+        else:
+            kind = "se"
+        return ParseResult(kind=kind, season=s, ep1=e1, ep2=int(e2) if e2 else None,
+                           extra_type=extra_type, extra_index=extra_idx,
+                           split_token=split_token, split_index=split_idx)
+
+    # Alt SE like 01x05 / 01E05
+    m2 = ALT_SE_RE.search(base)
+    if m2:
+        s = int(m2.group("s"))
+        e1 = int(m2.group("e"))
+        return ParseResult(kind="se", season=s, ep1=e1, extra_type=extra_type, extra_index=extra_idx,
+                           split_token=split_token, split_index=split_idx)
+
+    # Date based
+    d_iso = detect_date(base)
+    if d_iso:
+        return ParseResult(kind="date", date_iso=d_iso, extra_type=extra_type,
+                           extra_index=extra_idx, split_token=split_token,
+                           split_index=split_idx)
+
+    # Post-year dash ep form: ") - 01 " ⇒ assume season 1
+    d3 = DASH_EP_AFTER_YEAR_RE.search(base)
+    if d3:
+        e1 = int(d3.group("e"))
+        return ParseResult(kind="se", season=1, ep1=e1, extra_type=extra_type, extra_index=extra_idx,
+                           split_token=split_token, split_index=split_idx)
+
+    # Absolute number
+    a = ABSOLUTE_NUMBER_RE.match(base)
+    if a:
+        return ParseResult(kind="absolute", ep1=int(a.group("abs")), extra_type=extra_type,
+                           extra_index=extra_idx, split_token=split_token, split_index=split_idx)
+
+    return ParseResult(kind="unknown", extra_type=extra_type, extra_index=extra_idx,
+                       split_token=split_token, split_index=split_idx)
+
+# ---------------------- Renamer Logic ----------------------
+@dataclass
+class ShowContext:
+    title: str
+    year: Optional[int]
+    provider_name: str
+    provider: Provider
+    show_id: str
+    episode_index: List[EpisodeInfo]
+
+
+def sanitize_filename(s: str) -> str:
+    return re.sub(r"[\\/:*?\"<>|]", "_", s).strip()
+
+
+def ensure_dir(p: pathlib.Path):
+    p.mkdir(parents=True, exist_ok=True)
+
+
+def format_season_folder(n: int) -> str:
+    return f"Season {n:02d}"
+
+
+def target_filename(show_title: str, year: Optional[int], episode: EpisodeInfo,
+                    ext: str, date_iso: Optional[str]=None, extra: Optional[str]=None,
+                    multi_ep: Optional[Tuple[int,int]]=None, upper_se: bool = False) -> str:
+    base_show = f"{show_title} ({year})" if year else show_title
+    s_char = "S" if upper_se else "s"
+    e_char = "E" if upper_se else "e"
+    if date_iso:
+        dt = datetime.strptime(date_iso, "%Y-%m-%d")
+        date_disp = dt.strftime("%d-%m-%Y")
+        ep_title = episode.title or ""
+        name = f"{base_show} - {date_disp}"
+        if ep_title:
+            name += f" - {sanitize_filename(ep_title)}"
+        if extra:
+            name += f"-{extra}"
+        return f"{name}{ext}"
+    else:
+        if multi_ep:
+            s, e1, e2 = episode.season, multi_ep[0], multi_ep[1]
+            name = f"{base_show} - {s_char}{s:02d}{e_char}{e1:02d}-{e_char}{e2:02d}"
+        else:
+            name = f"{base_show} - {s_char}{episode.season:02d}{e_char}{episode.episode:02d}"
+        if episode.title:
+            name += f" - {sanitize_filename(episode.title)}"
+        if extra:
+            name += f"-{extra}"
+        return f"{name}{ext}"
+
+
+def resolve_episode_from_absolute(ctx: ShowContext, abs_index: int) -> Optional[EpisodeInfo]:
+    # Convert 1-based absolute index to episode
+    if abs_index <= 0:
+        return None
+    if not ctx.episode_index:
+        ctx.episode_index = ctx.provider.build_episode_index(ctx.show_id)
+    if abs_index <= len(ctx.episode_index):
+        return ctx.episode_index[abs_index - 1]
+    return None
+
+
+def do_process(ctx: ShowContext, src_dir: pathlib.Path, dst_root: Optional[pathlib.Path],
+               dry_run: bool, logfn, upper_se: bool) -> None:
+    files = [p for p in src_dir.iterdir() if p.is_file()]
+    if not files:
+        logfn("No files found in source directory.")
+        return
+
+    # Determine destination root
+    show_disp = f"{ctx.title} ({ctx.year})" if ctx.year else ctx.title
+    if not dst_root:
+        dst_root = src_dir
+    show_dir = dst_root / show_disp
+    ensure_dir(show_dir)
+
+    # Cache seasons
+    season_cache: Dict[int, Dict] = {}
+
+    def get_episode(s: int, e: int) -> Optional[EpisodeInfo]:
+        if s not in season_cache:
+            season_cache[s] = ctx.provider.load_season(ctx.show_id, s)
+        for ep in season_cache[s].get("episodes", []):
+            if int(ep.get("episode_number", -1)) == int(e):
+                return EpisodeInfo(season=s, episode=e, title=ep.get("name"),
+                                   air_date=ep.get("air_date"), is_special=(s==0))
+        # Fallback when title missing
+        return EpisodeInfo(season=s, episode=e, title=None, air_date=None, is_special=(s==0))
+
+    for p in files:
+        pr = parse_filename(p.name)
+        ext = p.suffix
+        # Determine target episode info and season folder
+        ep_info: Optional[EpisodeInfo] = None
+        multi_ep_range: Optional[Tuple[int,int]] = None
+        season_folder = None
+        date_iso = None
+        extra_suffix = None
+
+        if pr.extra_type:
+            extra_suffix = f"{pr.extra_type}{pr.extra_index or ''}"
+
+        if pr.kind in ("se", "special") and pr.season is not None and pr.ep1 is not None:
+            ep_info = get_episode(pr.season, pr.ep1)
+            season_folder = format_season_folder(pr.season)
+        elif pr.kind == "se_range" and pr.season is not None and pr.ep1 is not None and pr.ep2 is not None:
+            e1, e2 = pr.ep1, pr.ep2
+            ep_info = get_episode(pr.season, e1)
+            multi_ep_range = (e1, e2)
+            season_folder = format_season_folder(pr.season)
+        elif pr.kind == "date" and pr.date_iso:
+            ep_info = ctx.provider.map_date_to_episode(ctx.show_id, pr.date_iso)
+            date_iso = pr.date_iso
+            if ep_info:
+                season_folder = format_season_folder(ep_info.season)
+            else:
+                season_folder = format_season_folder(1)
+        elif pr.kind == "absolute" and pr.ep1:
+            ep_info = resolve_episode_from_absolute(ctx, pr.ep1)
+            if ep_info:
+                season_folder = format_season_folder(ep_info.season)
+            else:
+                season_folder = format_season_folder(1)
+        else:
+            # Unknown pattern — leave in place but log
+            logfn(f"SKIP (unknown): {p.name}")
+            continue
+
+        if not ep_info:
+            logfn(f"WARN: Could not resolve episode metadata for {p.name} — using minimal naming.")
+            # Minimal fallback
+            ep_info = EpisodeInfo(season=int(re.search(r"\d+", season_folder).group()), episode=pr.ep1 or 1)
+
+        # Determine destination
+        season_dir = show_dir / season_folder
+        ensure_dir(season_dir)
+
+        # Episode-level extras must sit next to episode; naming keeps -extra suffix
+        target_name = target_filename(ctx.title, ctx.year, ep_info, ext,
+                                      date_iso=date_iso, extra=extra_suffix,
+                                      multi_ep=multi_ep_range, upper_se=upper_se)
+        dst = season_dir / target_name
+
+        # Handle split parts (cd1, pt2, etc.) — append token before extension
+        if pr.split_token and pr.split_index:
+            stem, ext2 = os.path.splitext(dst.name)
+            dst = dst.with_name(f"{stem}-{pr.split_token}{pr.split_index}{ext2}")
+
+        if dry_run:
+            logfn(f"DRY-RUN: {p} -> {dst}")
+        else:
+            # If file with same name exists, avoid overwrite by appending (1), (2), ...
+            candidate = dst
+            i = 1
+            while candidate.exists():
+                stem, ext2 = os.path.splitext(dst.name)
+                candidate = dst.with_name(f"{stem} ({i}){ext2}")
+                i += 1
+            shutil.move(str(p), str(candidate))
+            logfn(f"MOVED: {p.name} -> {candidate.relative_to(show_dir)}")
+
+# ---------------------- GUI (PySimpleGUI) ----------------------
+# These functions are only used if sg (PySimpleGUI/FreeSimpleGUI) is available
+
+
+def _set_theme_safe(theme_name: str = "SystemDefault") -> None:
+    try:
+        if hasattr(sg, "theme"):
+            try:
+                sg.theme(theme_name)
+                return
+            except Exception:
+                pass
+        if hasattr(sg, "ChangeLookAndFeel"):
+            try:
+                sg.ChangeLookAndFeel(theme_name)
+                return
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _text(text: str = "", **kwargs):
+    if hasattr(sg, "Text"):
+        try:
+            return sg.Text(text, **kwargs)
+        except Exception:
+            pass
+    for alt in ("T", "Txt"):
+        if hasattr(sg, alt):
+            try:
+                return getattr(sg, alt)(text, **kwargs)
+            except Exception:
+                continue
+    ml_kwargs = {
+        "size": kwargs.get("size", (60, 2)),
+        "disabled": True,
+        "background_color": kwargs.get("background_color", SPLASH_BG),
+        "text_color": kwargs.get("text_color", SPLASH_TEXT),
+        "no_scrollbar": True if hasattr(sg, "Multiline") and "no_scrollbar" in getattr(sg.Multiline.__init__, "__code__", type("", (), {"co_varnames": ()})).co_varnames else False,
+    }
+    default_text = text
+    try:
+        return sg.Multiline(default_text, **ml_kwargs)
+    except Exception:
+        return sg.Column([[ ]], background_color=kwargs.get("background_color", SPLASH_BG))
+
+
+def _separator_widget():
+    return sg.HSeparator() if hasattr(sg, "HSeparator") else _text("-" * 80, background_color=SPLASH_BG)
+
+
+def _multiline_log(**kwargs):
+    supported = {
+        "key": kwargs.get("key", "log"),
+        "size": kwargs.get("size", (100, 20)),
+        "autoscroll": kwargs.get("autoscroll", True),
+        "disabled": kwargs.get("disabled", False),
+        "reroute_stdout": kwargs.get("reroute_stdout", False),
+        "reroute_stderr": kwargs.get("reroute_stderr", False),
+        "background_color": kwargs.get("background_color", SPLASH_BG),
+        "text_color": kwargs.get("text_color", SPLASH_TEXT),
+    }
+    return sg.Multiline(**supported)
+
+
+def resource_root() -> pathlib.Path:
+    if hasattr(sys, "_MEIPASS"):
+        try:
+            return pathlib.Path(getattr(sys, "_MEIPASS")).resolve()
+        except Exception:
+            pass
+    try:
+        a0 = sys.argv[0]
+        if a0:
+            p = pathlib.Path(a0).resolve().parent
+            if p.exists():
+                return p
+    except Exception:
+        pass
+    return pathlib.Path(os.getcwd()).resolve()
+
+
+def find_asset(*names: str) -> Optional[str]:
+    roots = [resource_root(), resource_root() / "assets"]
+    for r in roots:
+        for n in names:
+            p = r / n
+            if p.exists():
+                return str(p)
+        for p in r.glob("*blue_square_2*"):
+            if p.suffix.lower() in (".png", ".svg"):
+                return str(p)
+    return None
+
+
+def ensure_png_from_svg(svg_path: str, out_size: int = 128) -> Optional[str]:
+    try:
+        import cairosvg  # type: ignore
+        out = os.path.splitext(svg_path)[0] + ".png"
+        cairosvg.svg2png(url=svg_path, write_to=out, output_width=out_size)
+        return out
+    except Exception:
+        return None
+
+
+def show_splash(skip: bool = False):
+    if skip:
+        return
+    _set_theme_safe("SystemDefault")
+
+    meta_logo = find_asset("MetaSeries Logo.png", "MetaSeriesLogo.png", "metaseries_logo.png")
+    blue_logo = find_asset("blue_square_2.png", "blue_square_2.svg")
+    if blue_logo and blue_logo.lower().endswith(".svg"):
+        png = ensure_png_from_svg(blue_logo, out_size=96)
+        blue_logo = png or None
+
+    col = [
+        [sg.Image(meta_logo, subsample=2, pad=((0,0),(10,5)), background_color=SPLASH_BG) if meta_logo else _text(APP_NAME, font=("Segoe UI", 20, "bold"), text_color=SPLASH_TEXT, background_color=SPLASH_BG)],
+        [_text("This MetaSeries-Organiser uses TMDB and the TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB", size=(60, 3), justification="center", text_color=SPLASH_TEXT, background_color=SPLASH_BG, font=("Segoe UI", 9), pad=((10,10),(0,5)))],
+        [sg.Image(blue_logo, subsample=4, background_color=SPLASH_BG, pad=(0,5)) if blue_logo else _text("", background_color=SPLASH_BG)],
+        [sg.Button("Continue", button_color=(SPLASH_TEXT, ACCENT), border_width=0, pad=((0,0),(5,10)))]
+    ]
+
+    layout = [[sg.Column(col, background_color=SPLASH_BG, element_justification="center", expand_x=True)]]
+    try:
+        win = sg.Window(APP_NAME, layout, no_titlebar=False, keep_on_top=True, finalize=True, background_color=SPLASH_BG, element_justification="center")
+    except TypeError:
+        win = sg.Window(APP_NAME, layout, keep_on_top=True, background_color=SPLASH_BG)
+    win.read(timeout=4000)
+    win.close()
+
+
+def build_gui_psg():
+    _set_theme_safe("SystemDefault")
+
+    layout = [
+        [_text("Source folder with loose episodes:", text_color=SPLASH_TEXT, background_color=SPLASH_BG), sg.Input(key="src"), sg.FolderBrowse()],
+        [_text("Destination root (optional):", text_color=SPLASH_TEXT, background_color=SPLASH_BG), sg.Input(key="dst"), sg.FolderBrowse()],
+        [_text("Show Title:", text_color=SPLASH_TEXT, background_color=SPLASH_BG), sg.Input(key="title", size=(40,1)), _text("Year (optional):", text_color=SPLASH_TEXT, background_color=SPLASH_BG), sg.Input(key="year", size=(8,1))],
+        [_text("Data Provider:", text_color=SPLASH_TEXT, background_color=SPLASH_BG), sg.Combo(["TMDB", "TVDB"], key="provider", default_value="TMDB", readonly=True if hasattr(sg, "Combo") else False), _text("API Key/Token:", text_color=SPLASH_TEXT, background_color=SPLASH_BG), sg.Input(key="apikey", password_char="•", size=(30,1))],
+        [sg.Checkbox("Uppercase S/E codes (S01E01)", key="upper", default=True, text_color=SPLASH_TEXT, background_color=SPLASH_BG)],
+        [sg.Checkbox("Dry run (don’t move, just log)", key="dry", default=True, text_color=SPLASH_TEXT, background_color=SPLASH_BG)],
+        [_separator_widget()],
+        [sg.Button("Start", button_color=(SPLASH_TEXT, ACCENT)), sg.Button("Exit")],
+        [_multiline_log(key="log", size=(100,20), autoscroll=True, disabled=False)]
+    ]
+    try:
+        return sg.Window(APP_NAME, layout, finalize=True, background_color=SPLASH_BG)
+    except TypeError:
+        return sg.Window(APP_NAME, layout, background_color=SPLASH_BG)
+
+
+# ---------------------- GUI (Tkinter) ----------------------
+
+def show_splash_tk(root: tk.Tk, skip: bool = False):
+    if skip:
+        return
+    top = tk.Toplevel(root)
+    top.title(APP_NAME)
+    top.configure(bg=SPLASH_BG)
+    top.attributes("-topmost", True)
+
+    # Center the splash roughly
+    w, h = 520, 320
+    x = max(0, (top.winfo_screenwidth() - w)//2)
+    y = max(0, (top.winfo_screenheight() - h)//3)
+    top.geometry(f"{w}x{h}+{x}+{y}")
+
+    # Try to load logos (PNG only)
+    meta_path = find_asset("MetaSeries Logo.png", "MetaSeriesLogo.png", "metaseries_logo.png")
+    blue_path = find_asset("blue_square_2.png")
+    meta_img = None
+    blue_img = None
+    try:
+        if meta_path and os.path.splitext(meta_path)[1].lower() == ".png":
+            meta_img = tk.PhotoImage(file=meta_path)
+            # make it smaller via subsample
+            meta_img = meta_img.subsample(2)
+    except Exception:
+        meta_img = None
+    try:
+        if blue_path and os.path.splitext(blue_path)[1].lower() == ".png":
+            blue_img = tk.PhotoImage(file=blue_path)
+            blue_img = blue_img.subsample(4)
+    except Exception:
+        blue_img = None
+
+    pad = {"padx": 10, "pady": 5}
+    if meta_img:
+        tk.Label(top, image=meta_img, bg=SPLASH_BG).pack(**pad)
+    else:
+        tk.Label(top, text=APP_NAME, font=("Segoe UI", 18, "bold"), fg=SPLASH_TEXT, bg=SPLASH_BG).pack(**pad)
+
+    tk.Label(top,
+             text=("This MetaSeries-Organiser uses TMDB and the TMDB APIs but is not endorsed, "
+                   "certified, or otherwise approved by TMDB"),
+             wraplength=480, justify="center",
+             fg=SPLASH_TEXT, bg=SPLASH_BG, font=("Segoe UI", 9)).pack(**pad)
+
+    if blue_img:
+        tk.Label(top, image=blue_img, bg=SPLASH_BG).pack(**pad)
+
+    tk.Button(top, text="Continue", command=top.destroy, bg=ACCENT, fg=SPLASH_TEXT, relief=tk.FLAT).pack(pady=10)
+
+    # auto close after 4s
+    top.after(4000, top.destroy)
+
+    # Keep image refs to avoid GC
+    top._meta_img = meta_img
+    top._blue_img = blue_img
+
+    # block until closed (but don't block main root creation)
+    top.grab_set()
+    root.wait_window(top)
+
+
+def build_gui_tk():
+    root = tk.Tk()
+    root.title(APP_NAME)
+
+    show_splash_tk(root, skip=("--nosplash" in sys.argv))
+
+    # Variables
+    src_var = tk.StringVar()
+    dst_var = tk.StringVar()
+    title_var = tk.StringVar()
+    year_var = tk.StringVar()
+    provider_var = tk.StringVar(value="TMDB")
+    apikey_var = tk.StringVar()
+    upper_var = tk.BooleanVar(value=True)
+    dry_var = tk.BooleanVar(value=True)
+
+    # Grid config
+    for i in range(3):
+        root.grid_columnconfigure(i, weight=1)
+
+    def row(r, text, widget):
+        tk.Label(root, text=text).grid(row=r, column=0, sticky="w", padx=6, pady=4)
+        widget.grid(row=r, column=1, sticky="we", padx=6, pady=4)
+
+    # Source
+    src_entry = tk.Entry(root, textvariable=src_var, width=50)
+    row(0, "Source folder:", src_entry)
+    tk.Button(root, text="Browse", command=lambda: src_var.set(filedialog.askdirectory() or src_var.get())).grid(row=0, column=2, padx=6)
+
+    # Destination
+    dst_entry = tk.Entry(root, textvariable=dst_var, width=50)
+    row(1, "Destination folder (optional):", dst_entry)
+    tk.Button(root, text="Browse", command=lambda: dst_var.set(filedialog.askdirectory() or dst_var.get())).grid(row=1, column=2, padx=6)
+
+    # Title / Year
+    row(2, "Show Title:", tk.Entry(root, textvariable=title_var, width=50))
+    row(3, "Year (optional):", tk.Entry(root, textvariable=year_var, width=10))
+
+    # Provider / API key
+    provider_menu = tk.OptionMenu(root, provider_var, "TMDB", "TVDB")
+    row(4, "Data Provider:", provider_menu)
+    row(5, "API Key/Token:", tk.Entry(root, textvariable=apikey_var, show="•", width=40))
+
+    # Toggles
+    tk.Checkbutton(root, text="Uppercase S/E codes (S01E01)", variable=upper_var).grid(row=6, column=0, columnspan=2, sticky="w", padx=6)
+    tk.Checkbutton(root, text="Dry run (don’t move, just log)", variable=dry_var).grid(row=7, column=0, columnspan=2, sticky="w", padx=6)
+
+    # Log box
+    tk.Label(root, text="Log:").grid(row=8, column=0, sticky="nw", padx=6)
+    log_txt = tk.Text(root, height=16, width=90, state="disabled")
+    log_txt.grid(row=8, column=1, columnspan=2, sticky="nsew", padx=6, pady=6)
+    root.grid_rowconfigure(8, weight=1)
+
+    def log_tk(message: str):
+        timestamp = time.strftime("%H:%M:%S")
+        line = f"[{timestamp}] {message}\n"
+        log_txt.configure(state="normal")
+        log_txt.insert("end", line)
+        log_txt.see("end")
+        log_txt.configure(state="disabled")
+
+    def start():
+        try:
+            src = src_var.get().strip()
+            dst = dst_var.get().strip()
+            title = title_var.get().strip()
+            year_s = year_var.get().strip()
+            provider_name = provider_var.get()
+            apikey = apikey_var.get().strip()
+            upper = bool(upper_var.get())
+            dry = bool(dry_var.get())
+
+            if not src or not os.path.isdir(src):
+                messagebox.showerror("Error", "Please choose a valid source folder.")
+                return
+            if not title:
+                inferred = pathlib.Path(src).name
+                inferred = re.sub(r"(?i)\bseason\s*\d{1,2}\b", "", inferred).strip()
+                title = inferred
+                log_tk(f"Inferred title: {title}")
+            year = int(year_s) if year_s.isdigit() else None
+
+            if provider_name == "TMDB":
+                provider = TMDBProvider(apikey)
+                show = provider.search_show(title, year)
+                show_id = str(show.get("id"))
+                if not year:
+                    fa = (show.get("first_air_date") or "")[:4]
+                    if fa.isdigit():
+                        year = int(fa)
+                        log_tk(f"Detected year from TMDB: {year}")
+            else:
+                provider = TVDBProvider(apikey)
+                show = provider.search_show(title, year)
+                show_id = str(show.get("id") or show.get("tvdb_id") or show.get("series",{}).get("id") or "")
+
+            ctx = ShowContext(title=title, year=year, provider_name=provider_name, provider=provider, show_id=show_id, episode_index=[])
+            src_dir = pathlib.Path(src)
+            dst_root = pathlib.Path(dst) if dst else None
+            log_tk(f"Provider: {provider_name} | Show ID: {show_id}")
+            log_tk(f"Processing files in: {src_dir}")
+            do_process(ctx, src_dir, dst_root, dry, log_tk, upper_se=upper)
+            log_tk("Done.")
+        except ProviderError as e:
+            log_tk(f"Provider error: {e}")
+        except requests.HTTPError as e:
+            log_tk(f"HTTP error: {e}")
+        except Exception as e:
+            log_tk(f"Unexpected error: {e}")
+
+    tk.Button(root, text="Start", command=start).grid(row=9, column=1, pady=8)
+    tk.Button(root, text="Exit", command=root.destroy).grid(row=9, column=2, pady=8)
+
+    root.minsize(720, 480)
+    root.mainloop()
+
+
+# ---------------------- Self-tests (no GUI) ----------------------
+
+def run_self_tests() -> int:
+    failures = 0
+
+    def expect(cond, msg):
+        nonlocal failures
+        if not cond:
+            print("[FAIL]", msg)
+            failures += 1
+        else:
+            print("[OK]  ", msg)
+
+    # sXXeYY
+    pr = parse_filename("Show - s01e02 - Title.mkv")
+    expect(pr.kind == "se" and pr.season == 1 and pr.ep1 == 2, "parse s01e02")
+
+    # sXXeYY-eZZ
+    pr = parse_filename("Show - s02e18-e19 - Two Parter.mkv")
+    expect(pr.kind == "se_range" and pr.season == 2 and pr.ep1 == 18 and pr.ep2 == 19, "parse s02e18-e19")
+
+    # Alt 01x05 / 01E05
+    pr = parse_filename("Show - 01x05 - Title.mkv")
+    expect(pr.kind == "se" and pr.season == 1 and pr.ep1 == 5, "parse 01x05")
+    pr = parse_filename("Show - 01E05 - Title.mkv")
+    expect(pr.kind == "se" and pr.season == 1 and pr.ep1 == 5, "parse 01E05")
+
+    # Post-year dash ep
+    pr = parse_filename("Euphoria (2019) - 01 Pilot.mkv")
+    expect(pr.kind == "se" and pr.season == 1 and pr.ep1 == 1, "parse Post-year dash ep → S01E01")
+
+    # Date-based YYYY-MM-DD
+    pr = parse_filename("The Colbert Report - 2011-11-15 - Guest.avi")
+    expect(pr.kind == "date" and pr.date_iso == "2011-11-15", "parse date yyyy-mm-dd")
+
+    # Date-based DD-MM-YYYY
+    pr = parse_filename("Show - 15-11-2011 - Ep.avi")
+    expect(pr.kind == "date" and pr.date_iso == "2011-11-15", "parse date dd-mm-yyyy")
+
+    # Absolute numbering
+    pr = parse_filename("141. Birthright, Part I.mkv")
+    expect(pr.kind == "absolute" and pr.ep1 == 141, "parse absolute number")
+
+    # Extras with index
+    pr = parse_filename("Game of Thrones - S01E01 - Winter is Coming-deleted2.mkv")
+    expect(pr.extra_type == "deleted" and pr.extra_index == 2, "parse inline extra with idx")
+
+    # Split parts
+    pr = parse_filename("Show - s01e01 - pt1.avi")
+    expect(pr.split_token == "pt" and pr.split_index == 1, "parse split part pt1")
+
+    # resource root & asset find fallbacks
+    rootp = resource_root()
+    expect(rootp.exists(), "resource_root returns an existing path")
+    missing = find_asset("__definitely_not_here__.png")
+    expect(missing is None, "find_asset returns None for missing file")
+
+    # Uppercase/lowercase toggle output
+    ei = EpisodeInfo(season=1, episode=1, title="Pilot")
+    name_low = target_filename("Show", 2019, ei, ".mkv", upper_se=False)
+    name_up = target_filename("Show", 2019, ei, ".mkv", upper_se=True)
+    expect("s01e01" in name_low.lower(), "lowercase S/E in output")
+    expect("S01E01" in name_up, "uppercase S/E in output")
+
+    print("Self-tests complete.")
+    return failures
+
+
+# ---------------------- Main ----------------------
+
+def main():
+    # Self-tests
+    if "--selftest" in sys.argv or "-t" in sys.argv:
+        failures = run_self_tests()
+        sys.exit(1 if failures else 0)
+
+    # Decide GUI backend
+    USE_TK = ("--tk" in sys.argv) or (sg is None)
+
+    if not USE_TK:
+        # PySimpleGUI / FreeSimpleGUI path
+        try:
+            psg_ver = getattr(sg, "__version__", "unknown")
+            print(f"[Info] PySimpleGUI/FreeSimpleGUI version: {psg_ver}")
+        except Exception:
+            pass
+        show_splash(skip=("--nosplash" in sys.argv))
+        win = build_gui_psg()
+        while True:
+            ev, values = win.read()
+            if ev in (sg.WINDOW_CLOSED, "Exit"):
+                break
+            if ev == "Start":
+                try:
+                    src = values.get("src") or ""
+                    dst = values.get("dst") or ""
+                    title = (values.get("title") or "").strip()
+                    year_s = (values.get("year") or "").strip()
+                    provider_name = values.get("provider")
+                    apikey = (values.get("apikey") or "").strip()
+                    upper = bool(values.get("upper"))
+                    dry = bool(values.get("dry"))
+
+                    if not src or not os.path.isdir(src):
+                        win["log"].print("Please choose a valid source folder.")
+                        continue
+                    if not title:
+                        inferred = pathlib.Path(src).name
+                        inferred = re.sub(r"(?i)\\bseason\\s*\\d{1,2}\\b", "", inferred).strip()
+                        title = inferred
+                        win["log"].print(f"Inferred title: {title}")
+                    year = int(year_s) if year_s.isdigit() else None
+
+                    if provider_name == "TMDB":
+                        provider = TMDBProvider(apikey)
+                        show = provider.search_show(title, year)
+                        show_id = str(show.get("id"))
+                        if not year:
+                            fa = (show.get("first_air_date") or "")[:4]
+                            if fa.isdigit():
+                                year = int(fa)
+                                win["log"].print(f"Detected year from TMDB: {year}")
+                    else:
+                        provider = TVDBProvider(apikey)
+                        show = provider.search_show(title, year)
+                        show_id = str(show.get("id") or show.get("tvdb_id") or show.get("series",{}).get("id") or "")
+
+                    ctx = ShowContext(title=title, year=year, provider_name=provider_name, provider=provider, show_id=show_id, episode_index=[])
+                    src_dir = pathlib.Path(src)
+                    dst_root = pathlib.Path(dst) if dst else None
+                    win["log"].print(f"Provider: {provider_name} | Show ID: {show_id}")
+                    win["log"].print(f"Processing files in: {src_dir}")
+                    def logfn(m):
+                        try:
+                            win["log"].print(m)
+                        except Exception:
+                            pass
+                    do_process(ctx, src_dir, dst_root, dry, logfn, upper_se=upper)
+                    win["log"].print("Done.")
+                except ProviderError as e:
+                    win["log"].print(f"Provider error: {e}")
+                except requests.HTTPError as e:
+                    win["log"].print(f"HTTP error: {e}")
+                except Exception as e:
+                    win["log"].print(f"Unexpected error: {e}")
+        win.close()
+    else:
+        # Tkinter path
+        build_gui_tk()
+
+
+if __name__ == "__main__":
+    main()

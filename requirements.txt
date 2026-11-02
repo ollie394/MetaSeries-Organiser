@@ -1,0 +1,6 @@
+requests>=2.32,<3
+blake3>=1.0,<2
+xxhash>=3.5,<4
+keyring>=25,<26
+cryptography>=44,<50
+Pillow>=11,<13
