@@ -6,6 +6,14 @@ Rename and organise TV episodes with metadata from TheTVDB or TMDB. Preview the 
 
 **Version 2.0.0 · Python 3.11+ · Windows desktop**
 
+## Windows download
+
+[**Download MetaSeries-Organiser 2.0.0 for Windows**](https://github.com/ollie394/MetaSeries-Organiser/releases/download/v2.0.0/MetaSeries-Organiser-Windows.zip)
+
+Extract the entire ZIP, then run `MetaSeries-Organiser.exe`. Keep the included `_internal` folder beside it. You do not need to install Python.
+
+[Release notes, source and checksums](https://github.com/ollie394/MetaSeries-Organiser/releases/tag/v2.0.0).
+
 ## What it does
 
 - Finds a series by name or provider ID, with a preferred metadata language.
