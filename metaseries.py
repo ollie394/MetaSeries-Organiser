@@ -1805,7 +1805,7 @@ def show_splash_tk(root: tk.Tk, skip: bool = False, about: bool = False):
         "A clear home for every episode. Match metadata, review file changes and organise your series.",
         "This product uses the TMDB API but is not endorsed or certified by TMDB.",
         "Metadata also provided by TheTVDB. Thank you to the communities who maintain these records.",
-        "Copyright © 2026 James · MIT licence. Provider logos belong to their respective owners.",
+        "Copyright © 2026 ollie394 · MIT licence. Provider logos belong to their respective owners.",
     ):
         label = ttk.Label(text, text=message, wraplength=390, style="Muted.TLabel", justify="left")
         label.pack(anchor="w", fill="x", pady=(0, 12))

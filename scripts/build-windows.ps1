@@ -33,10 +33,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed.' }
 
     $OutputDirectory = Join-Path $DistributionRoot 'MetaSeries-Organiser'
-    foreach ($Document in @('README.md', 'LICENSE', 'ATTRIBUTION.md', 'CHANGELOG.md')) {
+    foreach ($Document in @('LICENSE', 'ATTRIBUTION.md', 'CHANGELOG.md')) {
         Copy-Item -LiteralPath (Join-Path $ProjectRoot $Document) -Destination $OutputDirectory
     }
-    Copy-Item -LiteralPath (Join-Path $ProjectRoot 'docs') -Destination $OutputDirectory -Recurse -Force
+    Copy-Item -LiteralPath (Join-Path $ProjectRoot 'packaging\windows-readme.txt') -Destination (Join-Path $OutputDirectory 'README.md')
+    $SourceDirectory = Join-Path $OutputDirectory 'source'
+    Expand-Archive -LiteralPath (Join-Path $DistributionRoot 'MetaSeries-Organiser-Source.zip') -DestinationPath $SourceDirectory -Force
 
     $ArchivePath = Join-Path $DistributionRoot 'MetaSeries-Organiser-Windows.zip'
     Compress-Archive -LiteralPath $OutputDirectory -DestinationPath $ArchivePath -Force

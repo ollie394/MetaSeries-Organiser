@@ -12,11 +12,11 @@ VSVersionInfo(
     kids=[
         StringFileInfo([
             StringTable('080904B0', [
-                StringStruct('CompanyName', 'James'),
+                StringStruct('CompanyName', 'ollie394'),
                 StringStruct('FileDescription', 'MetaSeries Organiser'),
                 StringStruct('FileVersion', '2.0.0'),
                 StringStruct('InternalName', 'MetaSeries-Organiser'),
-                StringStruct('LegalCopyright', 'Copyright (c) 2026 James'),
+                StringStruct('LegalCopyright', 'Copyright (c) 2026 ollie394'),
                 StringStruct('OriginalFilename', 'MetaSeries-Organiser.exe'),
                 StringStruct('ProductName', 'MetaSeries Organiser'),
                 StringStruct('ProductVersion', '2.0.0'),

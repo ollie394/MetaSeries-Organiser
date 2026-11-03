@@ -4,8 +4,8 @@ The source project contains no saved credentials or media files. Build from this
 
 ## Verify the source
 
-1. Update `APP_VERSION` in `metaseries.py`, the version in the README, `CHANGELOG.md` and `packaging/version_info.txt` together. Update the versioned output paths in the build script, source packager and Windows workflow for the same release.
-2. Install `requirements-dev.txt` in a clean Python environment and run `python -m pytest -q`.
+1. Update `APP_VERSION` in `metaseries.py`, the version in the README, `CHANGELOG.md`, `packaging/version_info.txt` and `packaging/windows-readme.txt` together. Update the versioned output paths in the build script, source packager and Windows workflow for the same release.
+2. Install `requirements-dev.txt` in a clean Python environment and run `python -m pytest -q tests`.
 3. Open the app and check its main screen, About window, series chooser, episode resolver and approval preview. Check keyboard access and common Windows display scales.
 4. Test Preview only, Copy, Move, cancellation and Undo with disposable files. Test provider authentication manually with credentials you are authorised to use.
 5. Review the files being committed. Keep `data/`, personal configuration, vaults, logs, virtual environments and build outputs out of the repository.
@@ -13,6 +13,8 @@ The source project contains no saved credentials or media files. Build from this
 ## Build and inspect Windows output
 
 Run `scripts/build-windows.ps1` from PowerShell. It runs the automated tests, creates the source archive, invokes [PyInstaller](https://pyinstaller.org/en/stable/spec-files.html), copies the licence and user documentation, and creates Windows and source ZIPs with SHA-256 checksums in `dist/2.0.0/`.
+
+The Windows folder includes a short startup README and the matching source project under `source/MetaSeries-Organiser/`. The user guide and history links point into that source folder, so the documentation can be opened after extracting the Windows ZIP.
 
 Launch `dist/2.0.0/MetaSeries-Organiser/MetaSeries-Organiser.exe` on a Windows computer or clean Windows account without a separate Python installation. Confirm the logos, window icon, BLAKE3 verification, secure credential backend and portable vault work in the packaged application. Automated source tests do not replace this check.
 
