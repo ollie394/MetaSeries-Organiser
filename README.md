@@ -104,7 +104,7 @@ For isolated development or GUI checks, set `MSO_STATE_DIR` to a disposable dire
 
 The application code is available under the [MIT licence](LICENSE). Provider logos and other third-party material retain their respective owners' rights; see [ATTRIBUTION.md](ATTRIBUTION.md).
 
-This product uses the TMDB API but is not endorsed or certified by TMDB. Metadata is also provided by [TheTVDB](https://thetvdb.com/).
+This product uses the TMDB API but is not endorsed or certified by TMDB. Metadata is also provided by TheTVDB. Please consider contributing missing information or subscribing.
 
 ## Development history
 
