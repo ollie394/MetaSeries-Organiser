@@ -1,48 +1,45 @@
-# MetaSeries Organiser source history
+# MetaSeries Organiser history
 
-These 21 source snapshots show the retained development versions of MetaSeries Organiser. They were imported from local archives, not recovered from an original Git commit history.
+From the first TV renaming prototypes to MetaSeries Organiser 2.0.0.
 
-The current maintained application is version 2.0.0. Older labels such as V3 through V8 are retained script revision names; they do not replace the current product version.
+**Current version: [2.0.0](metaseries.py)** · [Changelog](CHANGELOG.md)
 
-## Reading this archive
+Dates below show when each archived source file was last saved.
 
-- Original filenames are preserved inside each snapshot directory. Identical aliases and backups are listed once in the provenance manifest.
-- Dates below are observed file modification dates in UTC. They are not verified publication or release dates.
-- Syntax checks do not establish that an old application works with current operating systems or provider APIs.
-- Nonempty embedded credential defaults were removed from three copies. Original files were left intact.
-- Personal settings, logs, recovery records and historical executables are excluded.
+## Prototypes
 
-## Retained snapshots
+| Version | Last saved | Source |
+| --- | --- | --- |
+| [Prototype 01](history/snapshots/prototype-01/README.md) | 2 September 2025 | [MSO-Prototype-01.py](history/snapshots/prototype-01/MSO-Prototype-01.py) |
+| [Prototype 02](history/snapshots/prototype-02/README.md) | 2 September 2025 | [MSO-Prototype-02.py](history/snapshots/prototype-02/MSO-Prototype-02.py) |
 
-| Snapshot | Original filename | Observed modification date (UTC) | Notes |
-| --- | --- | --- | --- |
-| [Initial unversioned prototype](history/snapshots/prototype-initial/README.md) | `tv_series_renamer_sorter_portable_python_gui.py` | 2025-09-02 | Prototype; release number unknown. |
-| [V1.2](history/snapshots/v1.2/README.md) | `tv_series_renamer_sorter_portable_python_gui V1.2.py` | 2025-09-02 | Known syntax error, line 499. |
-| [V1.3](history/snapshots/v1.3/README.md) | `tv_series_renamer_sorter_portable_python_gui V1.3.py` | 2025-09-02 |  |
-| [Unversioned MetaSeries prototype](history/snapshots/prototype-metaseries/README.md) | `MetaSeries-Organiser.py` | 2025-09-02 | Prototype; release number unknown. |
-| [V1.4](history/snapshots/v1.4/README.md) | `MSO V1.4.py` | 2025-09-02 | Identical alias or backup recorded. |
-| [V1.4.1](history/snapshots/v1.4.1/README.md) | `MSO-V1.4.1.py` | 2025-09-02 |  |
-| [V1.4.2](history/snapshots/v1.4.2/README.md) | `MSO-V1.4.2.py` | 2025-09-02 |  |
-| [V1.4.3](history/snapshots/v1.4.3/README.md) | `MSO-V1.4.3.py` | 2025-09-02 | Credential default removed. |
-| [V1.4.4](history/snapshots/v1.4.4/README.md) | `MSO-V1.4.4.py` | 2025-09-02 | Credential default removed. Known syntax error, line 1066. |
-| [V1.5](history/snapshots/v1.5/README.md) | `MSO-V1.5.py` | 2025-09-02 | Credential default removed. |
-| [V2](history/snapshots/v2/README.md) | `MSO-V2.py` | 2025-09-03 | Identical alias or backup recorded. |
-| [Experimental V2 snapshot (smaller)](history/snapshots/v2-prototype-small/README.md) | `MSO-v2.py` | 2025-09-04 | Prototype; release number unknown. |
-| [Experimental V2 snapshot](history/snapshots/v2-prototype/README.md) | `MSO-v2.py` | 2025-09-04 | Prototype; release number unknown. |
-| [V2.5](history/snapshots/v2.5/README.md) | `MSO-v2.5.py` | 2025-09-04 |  |
-| [V2.6](history/snapshots/v2.6/README.md) | `MSO-v2.6.py` | 2025-09-04 |  |
-| [V3](history/snapshots/v3/README.md) | `MSO-V3.py` | 2026-10-10 | Stale internal version wording. |
-| [V4](history/snapshots/v4/README.md) | `MSO-V4.py` | 2026-10-10 | Stale internal version wording. |
-| [V5](history/snapshots/v5/README.md) | `MSO-V5.py` | 2026-10-10 | Stale internal version wording. |
-| [V6](history/snapshots/v6/README.md) | `MSO-V6.py` | 2026-11-02 | Stale internal version wording. |
-| [V7](history/snapshots/v7/README.md) | `MSO-V7.py` | 2026-11-02 | Stale internal version wording. |
-| [V8](history/snapshots/v8/README.md) | `MSO-V8.py` | 2026-11-02 | Stale internal version wording. |
+## Version 1 development
 
-## Ambiguous names and duplicate copies
+| Version | Last saved | Source |
+| --- | --- | --- |
+| [1.2.0](history/snapshots/v1.2.0/README.md) | 2 September 2025 | [MSO-1.2.0.py](history/snapshots/v1.2.0/MSO-1.2.0.py) |
+| [1.3.0](history/snapshots/v1.3.0/README.md) | 2 September 2025 | [MSO-1.3.0.py](history/snapshots/v1.3.0/MSO-1.3.0.py) |
+| [1.4.0](history/snapshots/v1.4.0/README.md) | 2 September 2025 | [MSO-1.4.0.py](history/snapshots/v1.4.0/MSO-1.4.0.py) |
+| [1.4.1](history/snapshots/v1.4.1/README.md) | 2 September 2025 | [MSO-1.4.1.py](history/snapshots/v1.4.1/MSO-1.4.1.py) |
+| [1.4.2](history/snapshots/v1.4.2/README.md) | 2 September 2025 | [MSO-1.4.2.py](history/snapshots/v1.4.2/MSO-1.4.2.py) |
+| [1.4.3](history/snapshots/v1.4.3/README.md) | 2 September 2025 | [MSO-1.4.3.py](history/snapshots/v1.4.3/MSO-1.4.3.py) |
+| [1.4.4](history/snapshots/v1.4.4/README.md) | 2 September 2025 | [MSO-1.4.4.py](history/snapshots/v1.4.4/MSO-1.4.4.py) |
+| [1.5.0](history/snapshots/v1.5.0/README.md) | 2 September 2025 | [MSO-1.5.0.py](history/snapshots/v1.5.0/MSO-1.5.0.py) |
 
-- The earlier `MSO-V1.4.1.py` alias is identical to `MSO V1.4.py`. It is recorded with V1.4. The later, distinct V1.4.1 source is retained separately.
-- The V2 backup is identical to the main V2 source and is recorded as a duplicate origin.
-- Two different experimental files are both named `MSO-v2.py`; separate prototype directories keep their identities clear.
-- No clearly labelled V1.0 or V1.1 source was found. The unversioned prototypes have not been assigned invented version numbers.
+## Version 2.0.0 development
 
-See [manifest.json](history/manifest.json) for relative source paths, original and staged SHA-256 hashes, duplicate origins, sanitisation records and syntax results.
+The saved drafts leading to 2.0.0 are numbered in order. These archive names distinguish development builds from the current version.
+
+| Version | Last saved | Source |
+| --- | --- | --- |
+| [2.0.0-dev-01](history/snapshots/v2.0.0-dev-01/README.md) | 3 September 2025 | [MSO-2.0.0-dev-01.py](history/snapshots/v2.0.0-dev-01/MSO-2.0.0-dev-01.py) |
+| [2.0.0-dev-02](history/snapshots/v2.0.0-dev-02/README.md) | 4 September 2025 | [MSO-2.0.0-dev-02.py](history/snapshots/v2.0.0-dev-02/MSO-2.0.0-dev-02.py) |
+| [2.0.0-dev-03](history/snapshots/v2.0.0-dev-03/README.md) | 4 September 2025 | [MSO-2.0.0-dev-03.py](history/snapshots/v2.0.0-dev-03/MSO-2.0.0-dev-03.py) |
+| [2.0.0-dev-04](history/snapshots/v2.0.0-dev-04/README.md) | 4 September 2025 | [MSO-2.0.0-dev-04.py](history/snapshots/v2.0.0-dev-04/MSO-2.0.0-dev-04.py) |
+| [2.0.0-dev-05](history/snapshots/v2.0.0-dev-05/README.md) | 4 September 2025 | [MSO-2.0.0-dev-05.py](history/snapshots/v2.0.0-dev-05/MSO-2.0.0-dev-05.py) |
+| [2.0.0-dev-06](history/snapshots/v2.0.0-dev-06/README.md) | 10 October 2026 | [MSO-2.0.0-dev-06.py](history/snapshots/v2.0.0-dev-06/MSO-2.0.0-dev-06.py) |
+| [2.0.0-dev-07](history/snapshots/v2.0.0-dev-07/README.md) | 10 October 2026 | [MSO-2.0.0-dev-07.py](history/snapshots/v2.0.0-dev-07/MSO-2.0.0-dev-07.py) |
+| [2.0.0-dev-08](history/snapshots/v2.0.0-dev-08/README.md) | 10 October 2026 | [MSO-2.0.0-dev-08.py](history/snapshots/v2.0.0-dev-08/MSO-2.0.0-dev-08.py) |
+| [2.0.0-dev-09](history/snapshots/v2.0.0-dev-09/README.md) | 2 November 2026 | [MSO-2.0.0-dev-09.py](history/snapshots/v2.0.0-dev-09/MSO-2.0.0-dev-09.py) |
+| [2.0.0-dev-10](history/snapshots/v2.0.0-dev-10/README.md) | 2 November 2026 | [MSO-2.0.0-dev-10.py](history/snapshots/v2.0.0-dev-10/MSO-2.0.0-dev-10.py) |
+| [2.0.0-dev-11](history/snapshots/v2.0.0-dev-11/README.md) | 2 November 2026 | [MSO-2.0.0-dev-11.py](history/snapshots/v2.0.0-dev-11/MSO-2.0.0-dev-11.py) |
